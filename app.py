@@ -1,10 +1,22 @@
 import mysql.connector
-from flask import Flask, request, jsonify
+import json, uuid, wave, librosa, os, io
+from flask import Flask, request, jsonify, send_file,make_response
+from io import BytesIO
 from flask_cors import CORS
-import uuid
+from base64 import b64encode
+import numpy as np
+import matplotlib as plt
+import pandas as pd
+from scipy.signal import butter, lfilter
+import scipy.signal as signal
+from scipy.io import wavfile
+import tensorflow as tf
+import pandas as pd
+import numpy as np
+from keras.utils import to_categorical
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000/'], methods=['GET', 'POST'], allow_headers=['Content-Type'])
+CORS(app)
 
 # Configuración de la base de datos
 db_config = {
@@ -82,9 +94,7 @@ def login():
     data = request.json
     username = data['username']
     password = data['password']
-    
-    print(username)
-    print(password)
+
     conn = mysql.connector.connect(**db_config)
     cursor = conn.cursor()
     select_query = "SELECT * FROM Usuario WHERE username = %s AND password = %s"
@@ -107,12 +117,152 @@ def upload():
     if 'audio' not in request.files:
         return 'No se proporcionó ningún archivo de audio', 400
     
-    audio = request.files['audio']
-    username = request.form.get("username")  # Obtener el nombre de usuario del parámetro
-    tam = len(audio.read())  # Obtén el tamaño del archivo de audio
+    audio_get = request.files['audio']
+    username = request.form['username']  # Obtener el nombre de usuario del parámetro
+    #audio.seek(0)  # Vuelve al principio del archivo
     titulo = generar_titulo_unico()  # Genera un título único
-    clasificacion="prueba"
-    print(username)
+    #clasificacion="prueba"
+    
+    # Cargar el archivo de audio
+    audio_data_blob = BytesIO(audio_get.read())
+    audio_get.seek(0)
+    audio_database=audio_get.read()
+    audio, sr = librosa.load(audio_data_blob,sr=44100)
+    cantidad_muestras=len(audio)
+    frecuencia_muestreo=sr
+
+    print("La cantidad de muestras de nuestro audio es:",cantidad_muestras)
+    print("La frecuencia de muestro de nuestro audio es:",frecuencia_muestreo)
+
+
+    # Obtener la duración actual del audio en segundos
+    duracion_actual = librosa.get_duration(y=audio,sr=sr)
+
+    print("La duracion del audio es:",duracion_actual)
+
+    if duracion_actual < 5:
+        # Calcular la duración de la sección de audio silenciosa que se agregará al final
+        duracion_silencio = 5 - duracion_actual
+
+        # Calcular el número de muestras de audio silencioso que se agregarán al final
+        muestras_silencio = int(duracion_silencio * sr)
+
+        # Crear la sección de audio silenciosa
+        silencio = np.zeros(muestras_silencio, dtype=audio.dtype)
+
+        # Agregar la sección de audio silenciosa al final del archivo de audio existente
+        audio_completo = np.pad(audio, (0, muestras_silencio), mode='constant')
+
+        # Guardar el archivo de audio completo
+        #sf.write('audio_completo.wav', audio_completo, sr, subtype='PCM_16')
+
+
+
+    # Calcular el tamaño de la ventana y la cantidad de muestras de "padding"
+    window_size = 5
+    alpha=3
+    padding_size = window_size // 2
+
+    # Agregar una ventana de "padding" al principio y al final de la señal
+    padding = audio_completo[:padding_size][::-1]
+    audio_padded = np.concatenate((padding, audio_completo, padding))
+
+
+    # Aplicar el filtrado SDROM
+    audio_filtered = np.zeros_like(audio_padded)
+    for i in range(window_size//2, len(audio_padded)-window_size//2):
+        # Clasificar las muestras en la ventana según su magnitud
+        window = audio_padded[i-window_size//2:i+window_size//2+1]
+        idx = np.argsort(np.abs(window))
+        ranked = window[idx]
+
+        # Aplicar el filtro SDROM a las muestras clasificadas
+        rank_mean = np.mean(ranked[1:-1])
+        rank_sd = np.std(ranked[1:-1])
+        thresh = rank_mean + alpha * rank_sd
+        filtered_sample = ranked[0] if window[window_size//2] > thresh else rank_mean
+
+        # Asignar la muestra filtrada a la señal de audio filtrada
+        audio_filtered[i] = filtered_sample
+
+
+    # Aplicar SD-ROM a la señal de audio
+    audio_sdrom = audio_filtered
+    # Eliminar la ventana de "padding" de la señal resultante
+    audio_sdrom = audio_sdrom[padding_size:-padding_size]
+
+# Escalar la señal resultante de vuelta a valores enteros de 16 bits si es que se va a guardar en wav
+#audio_sdrom = (audio_sdrom * 32767.0).astype(np.int16)
+
+# Guardar la señal resultante en un archivo WAV
+
+#wavfile.write('audio_sdrom.wav', sr, audio_sdrom)
+
+
+    # Aplicar preénfasis
+    y_preemph = librosa.effects.preemphasis(audio_sdrom)
+
+    # Definir la frecuencia de corte
+    fc = 250
+
+    # Calcular los coeficientes del filtro Butterworth de orden 4
+    b, a = butter(4, fc / (sr / 2), 'highpass')
+
+    # Aplicar el filtro a la señal de audio
+    y_hpf = lfilter(b, a, y_preemph)
+
+    # Obtener el índice del inicio de la señal
+    onset = librosa.onset.onset_detect(y=y_hpf, sr=sr, units='samples')[0]
+
+    # Recortar la señal para que empiece en el inicio del llanto
+    y_cut = y_hpf[onset:]
+
+    # Obtener los coeficientes MFCC del archivo de audio
+    mfcc = librosa.feature.mfcc(y=y_cut, sr=sr, n_fft=2048,n_mels=40)
+
+    features = np.mean(mfcc.T, axis=0)
+    
+    print(features)
+    # Guarda los features en un archivo CSV
+    df = pd.DataFrame(features.reshape((1, 20)))  # Convierte los features en un DataFrame 
+    
+    #Debemos convertirlo a un matriz de None,20
+    df.to_csv(titulo+'.csv', index=False)  # Guarda el DataFrame en un archivo CS
+    
+    new_data = pd.read_csv(titulo+'.csv')
+    
+    # Elimina el archivo CSV
+    file_path = titulo+'.csv'  # Ruta del archivo CSV
+    if os.path.exists(file_path):  # Verifica si el archivo existe
+        os.remove(file_path)  # Elimina el archivo
+        print("Archivo CSV eliminado:", file_path)
+    else:
+        print("El archivo CSV no existe:", file_path)
+
+    model = tf.keras.models.load_model('rednc.h5')
+
+    predictions = model.predict(new_data)
+    predicted_classes = np.argmax(predictions, axis=1)
+
+    
+    for prediction in predicted_classes:
+        if prediction == 1:
+            print("Clase predicha: hambre")
+            clasificacion="Hambre"
+        elif prediction == 2:
+            print("Clase predicha: descontento")
+            clasificacion="Descontento"
+        else:
+            print("Clase predicha desconocida")
+            clasificacion="Desconocido"
+        
+    print("Predicciones:", predicted_classes)
+
+    label_names = ['1', '2']  # Reemplaza con los nombres de tus clases
+
+    predicted_labels = [label_names[prediction] for prediction in predicted_classes]
+    print("Clases predichas:", predicted_labels)
+    
     try:
         # Establece la conexión a la base de datos
         conn = mysql.connector.connect(**db_config)
@@ -122,21 +272,180 @@ def upload():
         cursor.execute('SELECT id_Usuario FROM Usuario WHERE username="'+username+'"')
         id_usuario = cursor.fetchone()[0]  # Suponiendo que solo necesitas el primer resultado
         
+        # Obtén los datos binarios del audio con reducción de ruido
+        #audio_database = audio_sdrom.tobytes()
+        
+        
+        
         # Inserta los datos en la tabla Audio
         sql = "INSERT INTO Audio (id_Audio, titulo, tam, audio, fecha, clasificacion, id_Usuario) VALUES (UUID_TO_BIN(UUID()), %s, %s, %s, NOW(), %s, %s)"
-        cursor.execute(sql, (titulo, tam, audio.read(), clasificacion, id_usuario))
-
+        cursor.execute(sql, (titulo, duracion_actual, audio_database, clasificacion, id_usuario))
+        
         # Guarda los cambios en la base de datos
         conn.commit()
 
         # Cierra la conexión
         cursor.close()
         conn.close()
+        
+        # Devuelve la clasificación en formato JSON
+        response = {
+        'id_audio': titulo,
+        'clasificacion': clasificacion
+        }
 
-        return 'Archivo de audio recibido y guardado correctamente'
+        return json.dumps(response), 200
 
     except mysql.connector.Error as error:
         return 'Error al guardar el archivo de audio en la base de datos: {}'.format(error), 500
+
+# Ruta de la API para obtener los audios de un usuario
+@app.route('/audios', methods=['POST'])
+def get_audios():
+
+    username=request.json.get("username")
+    print(username)
+    try:
+        # Conexión a la base de datos
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Consulta SQL para obtener los audios del usuario
+        query = 'SELECT a.titulo, a.clasificacion, a.fecha, BIN_TO_UUID(a.id_Audio) , u.username FROM Audio a INNER JOIN Usuario u ON a.id_Usuario = u.id_Usuario WHERE u.username='+username
+        
+        # Ejecutar la consulta
+        cursor.execute(query)
+        result = cursor.fetchall()
+       
+        # Crear una lista de diccionarios con los datos de los audios
+        audios = []
+        for row in result:
+            audio = {
+                'titulo': row[0],
+                'clasificacion': row[1],
+                'fecha': row[2].strftime('%Y-%m-%d %H:%M:%S'),  # Convertir fecha a formato string
+                'id_Audio': row[3]
+            }
+            audios.append(audio)
+
+        # Cerrar la conexión a la base de datos
+        cursor.close()
+        conn.close()
+
+        # Devolver la lista de audios en formato JSON
+        return jsonify(audios)
+    
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al obtener los audios: {error}')
+        return jsonify({'error': 'Ocurrió un error al obtener los audios'}), 500
+
+# Ruta de la API para obtener los audios de un usuario
+@app.route('/get_audios', methods=['POST'])
+def get_audios_download():
+    username=request.json.get("username")
+    print(username)
+    try:
+        # Conexión a la base de datos
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+
+        # Consulta SQL para obtener los audios del usuario
+        query = 'SELECT a.titulo, a.tam, BIN_TO_UUID(a.id_Audio), u.username FROM Audio a INNER JOIN Usuario u ON a.id_Usuario = u.id_Usuario WHERE u.username='+username
+        # Ejecutar la consulta
+        cursor.execute(query)
+        result = cursor.fetchall()
+        # Crear una lista de diccionarios con los datos de los audios
+        audios = []
+        for row in result:
+            audio = {
+                'titulo': row[0],
+                'tam': row[1],
+                'id_Audio': row[2]
+            }
+            audios.append(audio)
+
+        # Cerrar la conexión a la base de datos
+        cursor.close()
+        conn.close()
+
+        # Devolver la lista de audios en formato JSON
+        return jsonify(audios)
+    
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al obtener los audios: {error}')
+        return jsonify({'error': 'Ocurrió un error al obtener los audios'}), 500
+
+@app.route('/download_audio', methods=['POST'])
+def download_audio():
+    archivo_id = request.json.get('archivoId')
+
+    try:
+        # Conexión a la base de datos y consulta para obtener el archivo de audio
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        query = "SELECT audio, titulo FROM Audio WHERE id_Audio = UUID_TO_BIN(%s)"
+        cursor.execute(query, (archivo_id,))
+        result = cursor.fetchone()
+         # Verificar si se encontró el archivo de audio
+        if result is None:
+            return jsonify({'error': 'Archivo no encontrado'}), 404
+        
+        audio_blob = result[0]
+        titulo = result[1]
+
+        # Crear un archivo temporal para almacenar el audio
+        audio_file_path = './'+titulo+'.wav'
+        with wave.open(audio_file_path, 'wb') as audio_file:
+            audio_file.setnchannels(1)  # 1 canal de audio (mono)
+            audio_file.setsampwidth(2)  # 2 bytes por muestra
+            audio_file.setframerate(44100)  # Frecuencia de muestreo de 44100 Hz
+            audio_file.writeframes(audio_blob)
+
+        # Enviar el archivo de audio como respuesta al cliente
+        response = send_file(audio_file_path, mimetype='audio/wav')
+        response.headers['Content-Disposition'] = f'attachment; filename={titulo}.wav'
+         # Eliminar el archivo temporal
+        os.remove(audio_file_path)
+        return response
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al descargar el archivo de audio: {error}')
+        return jsonify({'error': 'Ocurrió un error al descargar el archivo de audio'}), 500
+
+@app.route('/informacion-personal', methods=["POST"])
+def obtener_informacion_personal():
+    username = request.json.get('username')
+    try:
+    
+        
+        # Conexión a la base de datos y consulta para obtener la información personal del usuario
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        query = 'SELECT nombre, apellido_P, apellido_M, email FROM Usuario WHERE username ='+username
+        cursor.execute(query)
+        result = cursor.fetchone()
+        
+        # Verificar si se encontró la información personal del usuario
+        if result is None:
+            return jsonify({'error': 'Información personal no encontrada'}), 404
+        
+        informacion_personal = {
+            'nombre': result[0],
+            'apellido_P': result[1],
+            'apellido_M': result[2],
+            'email': result[3]
+        }
+        
+        return jsonify(informacion_personal)
+    
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al obtener la información personal: {error}')
+        return jsonify({'error': 'Ocurrió un error al obtener la información personal'}), 500
+
+
 
 if __name__ == '__main__':
     app.run(debug=True)
