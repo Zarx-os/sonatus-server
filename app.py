@@ -516,7 +516,9 @@ def obtener_informacion_personal():
         print(f'Error al obtener la información personal: {error}')
         return jsonify({'error': 'Ocurrió un error al obtener la información personal'}), 500
 
-
+@app.route("/")
+def index():
+    return "<h1>El servidor esta funcionando</h1>"
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0",port='5000')
