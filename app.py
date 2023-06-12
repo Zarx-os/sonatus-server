@@ -23,10 +23,13 @@ CORS(app)
 # Configuración de la base de datos
 db_config = {
     'host': 'localhost',
-    'user': 'root',
-    'password': 'G@d1266090',
-    'database': 'sonatus'
+    'user': 'fpvqazbzfr',
+    'password': '710CKR3MECR7G4N5$',
+    'database': 'sonatus-database',
+    'port':'3306'
 }
+
+
 app.config.from_pyfile('config.py')  # Carga la configuración desde el archivo config.py
 mail = Mail(app)  # Inicializa la extensión Mail
 
@@ -516,4 +519,4 @@ def obtener_informacion_personal():
 
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run(host="0.0.0.0",port='5000')
