@@ -1,5 +1,5 @@
 import mysql.connector
-import json, uuid, wave, librosa, os, io
+import json, uuid, wave, librosa, os, io, pickle, random,string
 from flask import Flask, request, jsonify, send_file,make_response
 from io import BytesIO
 from flask_cors import CORS
@@ -14,6 +14,8 @@ import tensorflow as tf
 import pandas as pd
 import numpy as np
 from keras.utils import to_categorical
+import soundfile as sf
+from flask_mail import Mail, Message
 
 app = Flask(__name__)
 CORS(app)
@@ -25,7 +27,8 @@ db_config = {
     'password': 'G@d1266090',
     'database': 'sonatus'
 }
-
+app.config.from_pyfile('config.py')  # Carga la configuración desde el archivo config.py
+mail = Mail(app)  # Inicializa la extensión Mail
 
 #Generar usernames unicos
 
@@ -42,7 +45,7 @@ def generar_username(nombre, apellido_paterno, apellido_materno):
     cursor = conn.cursor()
 
     # Verificar si el nombre de usuario ya existe en la base de datos
-    query = "SELECT COUNT(*) FROM Usuarios WHERE username = %s"
+    query = "SELECT COUNT(*) FROM Usuario WHERE username = %s"
     cursor.execute(query, (username,))
     count = cursor.fetchone()[0]
 
@@ -52,7 +55,7 @@ def generar_username(nombre, apellido_paterno, apellido_materno):
         num = 1
         while True:
             username = f'{username_base}{num}'
-            query = "SELECT COUNT(*) FROM Usuarios WHERE username = %s"
+            query = "SELECT COUNT(*) FROM Usuario WHERE username = %s"
             cursor.execute(query, (username,))
             count = cursor.fetchone()[0]
             if count == 0:
@@ -60,7 +63,12 @@ def generar_username(nombre, apellido_paterno, apellido_materno):
             num += 1
 
     return username
-    
+    #Genera password random
+def generate_random_password(length=8):
+    """Genera una contraseña aleatoria de longitud dada."""
+    characters = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(random.choice(characters) for _ in range(length))
+    return password
     
      # Genera un título único utilizando el módulo uuid
 def generar_titulo_unico():
@@ -79,11 +87,16 @@ def register():
     username = generar_username(nombre,apellido_p,apellido_m)
     conn = mysql.connector.connect(**db_config)
     cursor = conn.cursor()
-    insert_query = "INSERT INTO Usuario (id_Usuario,username, nombre, apellido_P, apellido_M, email, password) VALUES (%s, %s, %s, %s, %s, %s,%s)"
-    cursor.execute(insert_query, ("UUID_TO_BIN(UUID())",username, nombre, apellido_p, apellido_m, email, password))
+    insert_query = "INSERT INTO Usuario (id_Usuario,username, nombre, apellido_P, apellido_M, email, password) VALUES (UUID_TO_BIN(UUID()), %s, %s, %s, %s, %s,%s)"
+    cursor.execute(insert_query, (username, nombre, apellido_p, apellido_m, email, password))
     conn.commit()
     cursor.close()
     conn.close()
+    # Enviar el correo de confirmación
+    message = Message("Registro exitoso", sender=app.config['MAIL_USERNAME'], recipients=[email])
+    message.body = f"¡Hola! Gracias por registrarte en nuestra plataforma. Tu nuevo usuario para acceder es {username}"
+    mail.send(message)
+
 
     return jsonify({'message': 'Registro exitoso'})
 
@@ -110,6 +123,43 @@ def login():
     else:
         # Autenticación fallida
         return jsonify({'success': False, 'message': 'Invalid username or password'})
+#Contsena olvidada
+@app.route("/password", methods=["POST"])
+def reset_password():
+    # Consulta la base de datos para verificar si el correo existe
+    query = "SELECT * FROM Usuario WHERE email = %s"
+    cursor.execute(query, (email,))
+    result = cursor.fetchone()
+
+    if result:
+        # El correo existe en la base de datos
+        # Genera una nueva contraseña aleatoria
+        new_password = generate_random_password()
+
+        # Hashea la contraseña utilizando bcrypt
+        hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+
+        # Actualiza la contraseña en la base de datos
+        update_query = "UPDATE users SET password = %s WHERE email = %s"
+        cursor.execute(update_query, (hashed_password, email))
+
+        # Confirma los cambios en la base de datos
+        db.commit()
+
+        # Crea el mensaje de correo
+        message = Message("Recuperación de contraseña", sender=app.config['MAIL_USERNAME'], recipients=[email])
+        message.body = f"Hola, tu nueva contraseña es: {new_password}"
+
+        # Envía el correo
+        mail.send(message)
+
+        return jsonify({"success": True, "message": "Email sent"})
+    else:
+        # El correo no existe en la base de datos
+        return jsonify({"success": False, "message": "Email not found"})
+
+
+
 
 #Subir audio al servidor
 @app.route('/upload', methods=['POST'])
@@ -119,9 +169,8 @@ def upload():
     
     audio_get = request.files['audio']
     username = request.form['username']  # Obtener el nombre de usuario del parámetro
-    #audio.seek(0)  # Vuelve al principio del archivo
+    audio_get.seek(0)  # Vuelve al principio del archivo
     titulo = generar_titulo_unico()  # Genera un título único
-    #clasificacion="prueba"
     
     # Cargar el archivo de audio
     audio_data_blob = BytesIO(audio_get.read())
@@ -152,15 +201,27 @@ def upload():
 
         # Agregar la sección de audio silenciosa al final del archivo de audio existente
         audio_completo = np.pad(audio, (0, muestras_silencio), mode='constant')
-
-        # Guardar el archivo de audio completo
+        # Guardar el archivo de audio sdrom con reduccion de ruido
         #sf.write('audio_completo.wav', audio_completo, sr, subtype='PCM_16')
+        
+    elif duracion_actual > 5:
+        # Reducir la duración del audio a 5 segundos
+        duracion_objetivo = 5
 
+        # Calcular el número de muestras necesarias para obtener la duración objetivo
+        muestras_objetivo = int(duracion_objetivo * sr)
 
+        # Recortar el audio para obtener la duración objetivo
+        audio_completo = audio[:muestras_objetivo]
 
+        # Guardar el archivo de audio sdrom con reducción de ruido
+        #sf.write('audio_reducido.wav', audio_completo, sr, subtype='PCM_16')
+    else:
+        audio_completo=audio
+    
     # Calcular el tamaño de la ventana y la cantidad de muestras de "padding"
     window_size = 5
-    alpha=3
+    alpha=4
     padding_size = window_size // 2
 
     # Agregar una ventana de "padding" al principio y al final de la señal
@@ -190,7 +251,10 @@ def upload():
     audio_sdrom = audio_filtered
     # Eliminar la ventana de "padding" de la señal resultante
     audio_sdrom = audio_sdrom[padding_size:-padding_size]
-
+    
+    # Guardar el archivo de audio sdrom con reduccion de ruido
+    #sf.write('audio_sdrom.wav', audio_sdrom, sr, subtype='PCM_16')
+    
 # Escalar la señal resultante de vuelta a valores enteros de 16 bits si es que se va a guardar en wav
 #audio_sdrom = (audio_sdrom * 32767.0).astype(np.int16)
 
@@ -216,6 +280,9 @@ def upload():
 
     # Recortar la señal para que empiece en el inicio del llanto
     y_cut = y_hpf[onset:]
+    
+    # Guardar el archivo de audio sdrom con reduccion de ruido
+    #sf.write('filtropa.wav', y_cut, sr, subtype='PCM_16')
 
     # Obtener los coeficientes MFCC del archivo de audio
     mfcc = librosa.feature.mfcc(y=y_cut, sr=sr, n_fft=2048,n_mels=40)
@@ -272,14 +339,9 @@ def upload():
         cursor.execute('SELECT id_Usuario FROM Usuario WHERE username="'+username+'"')
         id_usuario = cursor.fetchone()[0]  # Suponiendo que solo necesitas el primer resultado
         
-        # Obtén los datos binarios del audio con reducción de ruido
-        #audio_database = audio_sdrom.tobytes()
-        
-        
-        
         # Inserta los datos en la tabla Audio
         sql = "INSERT INTO Audio (id_Audio, titulo, tam, audio, fecha, clasificacion, id_Usuario) VALUES (UUID_TO_BIN(UUID()), %s, %s, %s, NOW(), %s, %s)"
-        cursor.execute(sql, (titulo, duracion_actual, audio_database, clasificacion, id_usuario))
+        cursor.execute(sql, (titulo, duracion_actual, audio_data_blob.getvalue() , clasificacion, id_usuario))
         
         # Guarda los cambios en la base de datos
         conn.commit()
@@ -304,7 +366,6 @@ def upload():
 def get_audios():
 
     username=request.json.get("username")
-    print(username)
     try:
         # Conexión a la base de datos
         conn = mysql.connector.connect(**db_config)
@@ -394,20 +455,27 @@ def download_audio():
         
         audio_blob = result[0]
         titulo = result[1]
-
+        
+        # Crear un objeto BytesIO a partir del BLOB de audio
+        audio_data_blob = BytesIO(audio_blob)
+        audio_server, sr_server = sf.read(audio_data_blob)  
+        
         # Crear un archivo temporal para almacenar el audio
         audio_file_path = './'+titulo+'.wav'
-        with wave.open(audio_file_path, 'wb') as audio_file:
-            audio_file.setnchannels(1)  # 1 canal de audio (mono)
-            audio_file.setsampwidth(2)  # 2 bytes por muestra
-            audio_file.setframerate(44100)  # Frecuencia de muestreo de 44100 Hz
-            audio_file.writeframes(audio_blob)
-
+        
+        # Guardar el archivo de audio sdrom con reducción de ruido
+        sf.write(audio_file_path, audio_server, sr_server, subtype='PCM_16')
+        
+        # Crear una respuesta con el audio
+        response = make_response(audio_blob)
+    
         # Enviar el archivo de audio como respuesta al cliente
         response = send_file(audio_file_path, mimetype='audio/wav')
-        response.headers['Content-Disposition'] = f'attachment; filename={titulo}.wav'
-         # Eliminar el archivo temporal
+        response.headers['Content-Disposition'] = f'attachment; filename={audio_file_path}'
+        #response.headers['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+        # Eliminar el archivo temporal
         os.remove(audio_file_path)
+        
         return response
     except mysql.connector.Error as error:
         # Manejo de errores
@@ -448,4 +516,4 @@ def obtener_informacion_personal():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
