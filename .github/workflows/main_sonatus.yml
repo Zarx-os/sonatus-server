@@ -60,4 +60,4 @@ jobs:
         with:
           app-name: 'sonatus'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_062D8E5F5F3D4CA2830493439B2EBD26 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_4801868C744D42B28961CD6697B3862D }}
