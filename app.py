@@ -22,10 +22,10 @@ CORS(app)
 
 # Configuración de la base de datos
 db_config = {
-    'host': 'localhost',
-    'user': 'fpvqazbzfr',
-    'password': '710CKR3MECR7G4N5$',
-    'database': 'sonatus-database',
+    'host': 'sonatus-database.mysql.database.azure.com',
+    'user': 'sonatus',
+    'password': 'KaFe2019630504.',
+    'database': 'sonatus',
     'port':'3306'
 }
 
