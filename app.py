@@ -1,11 +1,9 @@
-import mysql.connector
-import json, uuid, wave, librosa, os, io, pickle, random,string
+import mysql.connector, json, uuid, wave, librosa, os, io, pickle, random,string,bcrypt
 from flask import Flask, request, jsonify, send_file,make_response
 from io import BytesIO
 from flask_cors import CORS
 from base64 import b64encode
 import numpy as np
-import matplotlib as plt
 import pandas as pd
 from scipy.signal import butter, lfilter
 import scipy.signal as signal
@@ -16,7 +14,6 @@ import numpy as np
 from keras.utils import to_categorical
 import soundfile as sf
 from flask_mail import Mail, Message
-
 app = Flask(__name__)
 CORS(app)
 
@@ -28,6 +25,7 @@ db_config = {
     'database': 'sonatus',
     'port':'3306'
 }
+
 
 
 app.config.from_pyfile('config.py')  # Carga la configuración desde el archivo config.py
@@ -88,20 +86,26 @@ def register():
     apellido_m = data['apellido_M']
     email = data['email']
     username = generar_username(nombre,apellido_p,apellido_m)
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    insert_query = "INSERT INTO Usuario (id_Usuario,username, nombre, apellido_P, apellido_M, email, password) VALUES (UUID_TO_BIN(UUID()), %s, %s, %s, %s, %s,%s)"
-    cursor.execute(insert_query, (username, nombre, apellido_p, apellido_m, email, password))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    # Enviar el correo de confirmación
-    message = Message("Registro exitoso", sender=app.config['MAIL_USERNAME'], recipients=[email])
-    message.body = f"¡Hola! Gracias por registrarte en nuestra plataforma. Tu nuevo usuario para acceder es {username}"
-    mail.send(message)
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        insert_query = "INSERT INTO Usuario (id_Usuario,username, nombre, apellido_P, apellido_M, email, password) VALUES (UUID_TO_BIN(UUID()), %s, %s, %s, %s, %s,%s)"
+        cursor.execute(insert_query, (username, nombre, apellido_p, apellido_m, email, password))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        # Enviar el correo de confirmación
+        message = Message("Registro exitoso", sender=app.config['MAIL_USERNAME'], recipients=[email])
+        message.html = f'<h1>Hola, {nombre} {apellido_p} {apellido_m}!</h1><p>Tu registro fue realizado con exito, ahora podras acceder a tu cuenta con el siguiente usuario {username} y con la contraseña que proporcionaste en el formumario.</p><p>Usuario: {username}</p><p>Contraseña: {password}</p>'
+        mail.send(message)
 
 
-    return jsonify({'message': 'Registro exitoso'})
+        return jsonify({'message': 'Registro exitoso'})
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al enviar correo: {error}')
+        return jsonify({'error': error}), 500
+
 
 
 # Inicio de sesión
@@ -110,59 +114,73 @@ def login():
     data = request.json
     username = data['username']
     password = data['password']
+    try:
+    
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        select_query = "SELECT * FROM Usuario WHERE username = %s AND password = %s"
+        cursor.execute(select_query, (username, password))
+        user = cursor.fetchone()
+        cursor.close()
+        conn.close()
 
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor()
-    select_query = "SELECT * FROM Usuario WHERE username = %s AND password = %s"
-    cursor.execute(select_query, (username, password))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-
-    if user:
+        if user:
         # Autenticación exitosa
         # Retornar algún token de autenticación si es necesario
-        return jsonify({'success': True,'user':username, 'token': 'your_token_here'})
-    else:
-        # Autenticación fallida
-        return jsonify({'success': False, 'message': 'Invalid username or password'})
+            return jsonify({'success': True,'user':username, 'token': 'your_token_here'})
+        else:
+            # Autenticación fallida
+            return jsonify({'success': False, 'message': 'Invalid username or password'})
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al loguearse: {error}')
+        return jsonify({'error':error}), 500
+
 #Contsena olvidada
 @app.route("/password", methods=["POST"])
 def reset_password():
+    data = request.json
+    email = data['email']
     # Consulta la base de datos para verificar si el correo existe
-    query = "SELECT * FROM Usuario WHERE email = %s"
-    cursor.execute(query, (email,))
-    result = cursor.fetchone()
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        query = "SELECT password FROM Usuario WHERE email = %s"
+        cursor.execute(query, (email,))
+        result = cursor.fetchone()
 
-    if result:
-        # El correo existe en la base de datos
-        # Genera una nueva contraseña aleatoria
-        new_password = generate_random_password()
+        if result:
+            # El correo existe en la base de datos
+            # Genera una nueva contraseña aleatoria
+            #new_password = generate_random_password()
 
-        # Hashea la contraseña utilizando bcrypt
-        hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+            # Hashea la contraseña utilizando bcrypt
+        #hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
 
         # Actualiza la contraseña en la base de datos
-        update_query = "UPDATE users SET password = %s WHERE email = %s"
-        cursor.execute(update_query, (hashed_password, email))
+        #update_query = "UPDATE users SET password = %s WHERE email = %s"
+        #cursor.execute(update_query, (hashed_password, email))
+
 
         # Confirma los cambios en la base de datos
-        db.commit()
+        #db.commit()
 
         # Crea el mensaje de correo
-        message = Message("Recuperación de contraseña", sender=app.config['MAIL_USERNAME'], recipients=[email])
-        message.body = f"Hola, tu nueva contraseña es: {new_password}"
+            message = Message("Recuperación de contraseña", sender=app.config['MAIL_USERNAME'], recipients=[email])
+            message.html = f'<h1>Hola!</h1><p>Parece que se te olvido tu contraseña.<h3>Es recomendable que cambies tu contraseña en la aplicacion</h3><p>Te la propocionaremos de nuevo<p>Contraseña: {result[0]}</p>'
 
         # Envía el correo
-        mail.send(message)
+            mail.send(message)
 
-        return jsonify({"success": True, "message": "Email sent"})
-    else:
-        # El correo no existe en la base de datos
-        return jsonify({"success": False, "message": "Email not found"})
+            return jsonify({"success": True, "message": "Email sent"})
+        else:
+            # El correo no existe en la base de datos
+            return jsonify({"success": False, "message": "Email not found"})
 
-
-
+    except mysql.connector.Error as error:
+        # Manejo de errores
+        print(f'Error al enviar correo: {error}')
+        return jsonify({'error': error}), 500
 
 #Subir audio al servidor
 @app.route('/upload', methods=['POST'])
@@ -190,7 +208,7 @@ def upload():
     # Obtener la duración actual del audio en segundos
     duracion_actual = librosa.get_duration(y=audio,sr=sr)
 
-    print("La duracion del audio es:",duracion_actual)
+    #print("La duracion del audio es:",duracion_actual)
 
     if duracion_actual < 5:
         # Calcular la duración de la sección de audio silenciosa que se agregará al final
@@ -288,13 +306,11 @@ def upload():
     #sf.write('filtropa.wav', y_cut, sr, subtype='PCM_16')
 
     # Obtener los coeficientes MFCC del archivo de audio
-    mfcc = librosa.feature.mfcc(y=y_cut, sr=sr, n_fft=2048,n_mels=40)
+    mfcc = librosa.feature.mfcc(y=y_cut, sr=sr,n_mfcc=20, n_fft=2048).T
 
-    features = np.mean(mfcc.T, axis=0)
-    
+    features = np.mean(mfcc, axis=0)
     print(features)
-    # Guarda los features en un archivo CSV
-    df = pd.DataFrame(features.reshape((1, 20)))  # Convierte los features en un DataFrame 
+    df = pd.DataFrame(features.reshape(1,20))  # Convierte los features en un DataFrame 
     
     #Debemos convertirlo a un matriz de None,20
     df.to_csv(titulo+'.csv', index=False)  # Guarda el DataFrame en un archivo CS
@@ -521,4 +537,4 @@ def index():
     return "<h1>El servidor esta funcionando</h1>"
 
 #if __name__ == '__main__':
-#    app.run(host="0.0.0.0",port='5000')
+#    app.run(debug=True, host="0.0.0.0",port='5000')
