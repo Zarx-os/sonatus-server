@@ -1,4 +1,4 @@
-import mysql.connector, json, uuid, wave, librosa, os, io, pickle, random,string,bcrypt
+import mysql.connector, json, uuid, wave, librosa, os, io, pickle, random,string
 from flask import Flask, request, jsonify, send_file,make_response
 from io import BytesIO
 from flask_cors import CORS
@@ -536,5 +536,5 @@ def obtener_informacion_personal():
 def index():
     return "<h1>El servidor esta funcionando</h1>"
 
-#if __name__ == '__main__':
-#    app.run(debug=True, host="0.0.0.0",port='5000')
+if __name__ == '__main__':
+    app.run(debug=True, host="0.0.0.0",port='5000')
