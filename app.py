@@ -330,21 +330,24 @@ def upload():
     predictions = model.predict(new_data)
     predicted_classes = np.argmax(predictions, axis=1)
 
-    
+
     for prediction in predicted_classes:
         if prediction == 1:
-            print("Clase predicha: hambre")
-            clasificacion="Hambre"
+            print("Clase predicha: colicos")
+            clasificacion = "Colicos"
         elif prediction == 2:
             print("Clase predicha: descontento")
-            clasificacion="Descontento"
+            clasificacion = "Descontento"
+        elif prediction == 3:
+        	print("Clase predicha: hambre")
+        	clasificacion = "Hambre"
         else:
             print("Clase predicha desconocida")
-            clasificacion="Desconocido"
+            clasificacion = "Desconocido"
         
     print("Predicciones:", predicted_classes)
 
-    label_names = ['1', '2']  # Reemplaza con los nombres de tus clases
+    label_names = ['1', '2', '3']  # Reemplaza con los nombres de tus clases
 
     predicted_labels = [label_names[prediction] for prediction in predicted_classes]
     print("Clases predichas:", predicted_labels)
